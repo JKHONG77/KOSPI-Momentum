@@ -1,0 +1,67 @@
+name: 매일 데이터 업데이트
+
+on:
+  schedule:
+    - cron: "30 9 * * 1-5"
+    - cron: "30 23 * * 0-4"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 패키지 설치
+        run: pip install numpy pandas cryptography
+
+      - name: 이전 데이터 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: data/daily
+          key: krx-daily-${{ github.run_id }}
+          restore-keys: krx-daily-
+
+      - name: KRX 데이터 수집
+        env:
+          KRX_AUTH_KEY: ${{ secrets.KRX_AUTH_KEY }}
+          KRX_AUTH_KEY_INDEX: ${{ secrets.KRX_AUTH_KEY_INDEX }}
+        run: python scripts/fetch.py
+
+      - name: 데이터 보관
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/daily
+          key: krx-daily-${{ github.run_id }}
+
+      - name: 분석
+        if: always()
+        run: python scripts/analyze.py
+
+      - name: 암호화
+        if: always()
+        env:
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+        run: python scripts/encrypt.py
+
+      - name: 결과 저장 (암호화된 파일만)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data.enc 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "대시보드 업데이트 $(TZ=Asia/Seoul date +%F)"
+          git push
