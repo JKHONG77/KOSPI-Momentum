@@ -20,6 +20,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(line_buffering=True)   # GitHub 로그에 바로바로 표시
+except Exception:
+    pass
+
 START = os.environ.get("START_DATE", "20100101")
 MAX_CALLS = int(os.environ.get("MAX_CALLS", "4500"))   # KRX 일일 호출한도(약 1만) 고려, 하루 2회 실행
 SLEEP = 0.1
@@ -49,6 +54,8 @@ calls = 0
 
 def call(kind, bas_dd, key):
     global calls
+    if kind == "idx" and os.environ.get("KRX_AUTH_KEY_INDEX", "").strip():
+        key = os.environ["KRX_AUTH_KEY_INDEX"].strip()   # 지수용 키를 따로 받은 경우
     if calls >= MAX_CALLS:
         raise StopRun(f"이번 실행 호출한도({MAX_CALLS}) 도달")
     last = None
@@ -59,8 +66,15 @@ def call(kind, bas_dd, key):
             try:
                 calls += 1
                 with urllib.request.urlopen(req, timeout=30, context=ssl.create_default_context()) as r:
-                    data = json.loads(r.read().decode("utf-8"))
+                    raw = r.read().decode("utf-8", "ignore")
                 time.sleep(SLEEP)
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    # KRX가 가끔 빈/비정상 응답을 줌 -> 잠시 쉬고 재시도
+                    last = f"비정상 응답: {raw[:120]!r}"
+                    time.sleep(5 * (attempt + 1))
+                    continue
                 if "OutBlock_1" not in data:
                     msg = json.dumps(data, ensure_ascii=False)[:300]
                     if any(w in msg.lower() for w in ("auth", "key", "인증", "권한")):
